@@ -1,0 +1,224 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2015-01-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "documentdb_1_Connection_Name": {
+      "type": "string",
+      "defaultValue": "documentdb"
+    },
+    "documentdb_1_Connection_DisplayName": {
+      "type": "string"
+    },
+    "documentdb_1_databaseAccount": {
+      "type": "string",
+      "metadata": {
+        "description": "Name of the account without 'documents.azure.com' part"
+      }
+    },
+    "documentdb_1_accessKey": {
+      "type": "securestring",
+      "metadata": {
+        "description": "Primary or Secondary Key"
+      }
+    },
+    "twilio_1_Connection_Name": {
+      "type": "string",
+      "defaultValue": "twilio"
+    },
+    "twilio_1_Connection_DisplayName": {
+      "type": "string",
+      "defaultValue": "Twilio"
+    },
+    "twilio_1_sid": {
+      "type": "securestring",
+      "metadata": {
+        "description": "Twilio Account Id"
+      }
+    },
+    "twilio_1_token": {
+      "type": "securestring",
+      "metadata": {
+        "description": "Twilio Access Token"
+      }
+    },
+    "LogicAppLocation": {
+      "type": "string",
+      "minLength": 1,
+      "defaultValue": "australiasoutheast"
+    }
+  },
+  "variables": {},
+  "resources": [
+    {
+      "properties": {
+        "state": "Enabled",
+        "definition": {
+          "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+          "actions": {
+            "Send_SMS_Text_Message_to_Confirm_with_Customer_the_Scheduled_Delivery": {
+              "type": "ApiConnection",
+              "inputs": {
+                "host": {
+                  "connection": {
+                    "name": "@parameters('$connections')['twilio']['connectionId']"
+                  }
+                },
+                "method": "post",
+                "path": "/Messages.json",
+                "body": {
+                  "from": "+61000000000",
+                  "to": "@triggerBody()?['scheduledDelivery']?['phone']",
+                  "body": "Hi @{triggerBody()?['scheduledDelivery']?['customerPreferredName']}, you have scheduled the order of @{triggerBody()?['scheduledDelivery']?['orderName']} to be delivered on @{triggerBody()?['scheduledDelivery']?['deliveryDate']}. Please reply YES if you want it. Your friends of FarmToTable :)"
+                }
+              },
+              "runAfter": {
+                "Store_Instance-Based_Webhook_Subscription_into_CosmosDb": [
+                  "Succeeded"
+                ]
+              },
+              "description": "This is the Start Request Processing action."
+            },
+            "Store_Instance-Based_Webhook_Subscription_into_CosmosDb": {
+              "type": "ApiConnection",
+              "inputs": {
+                "host": {
+                  "connection": {
+                    "name": "@parameters('$connections')['documentdb']['connectionId']"
+                  }
+                },
+                "method": "post",
+                "path": "/dbs/@{encodeURIComponent('db')}/colls/@{encodeURIComponent('webhooksubscriptions')}/docs",
+                "headers": {
+                  "x-ms-documentdb-is-upsert": true
+                },
+                "body": {
+                  "callbackUrl": "@triggerBody()?['callbackUrl']",
+                  "createdDateTime": "@{triggerBody()?['scheduledDelivery']?['createdDateTime']}",
+                  "deliveryId": "@{triggerBody()?['scheduledDelivery']?['deliveryId']}",
+                  "id": "@{triggerBody()?['scheduledDelivery']?['phone']}"
+                }
+              },
+              "runAfter": {},
+              "description": "Store the correlation between a unique id (phone number) and callback url plus additional metadata"
+            }
+          },
+          "parameters": {
+            "$connections": {
+              "defaultValue": {},
+              "type": "Object"
+            }
+          },
+          "triggers": {
+            "manual": {
+              "type": "Request",
+              "kind": "Http",
+              "inputs": {
+                "schema": {
+                  "properties": {
+                    "callbackUrl": {
+                      "type": "string"
+                    },
+                    "scheduledDelivery": {
+                      "properties": {
+                        "createdDateTime": {
+                          "type": "string"
+                        },
+                        "customer": {
+                          "type": "string"
+                        },
+                        "customerPreferredName": {
+                          "type": "string"
+                        },
+                        "deliveryAddressName": {
+                          "type": "string"
+                        },
+                        "deliveryDate": {
+                          "type": "string"
+                        },
+                        "deliveryId": {
+                          "type": "string"
+                        },
+                        "deliveryTime": {
+                          "type": "string"
+                        },
+                        "orderName": {
+                          "type": "string"
+                        },
+                        "phone": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  },
+                  "type": "object"
+                },
+                "method": "POST"
+              },
+              "description": "It receives as the request body the scheduled delivery details and the callback url. The provided post Url of this trigger is to be configured as the subscription Url on the Webhook action of the main Logic App. "
+            }
+          },
+          "contentVersion": "1.0.0.0",
+          "outputs": {}
+        },
+        "parameters": {
+          "$connections": {
+            "value": {
+              "twilio": {
+                "id": "[concat(subscription().id, '/providers/Microsoft.Web/locations/', 'australiasoutheast', '/managedApis/', 'twilio')]",
+                "connectionId": "[resourceId('Microsoft.Web/connections', parameters('twilio_1_Connection_Name'))]",
+                "connectionName": "[parameters('twilio_1_Connection_Name')]"
+              },
+              "documentdb": {
+                "id": "[concat(subscription().id, '/providers/Microsoft.Web/locations/', 'australiasoutheast', '/managedApis/', 'documentdb')]",
+                "connectionId": "[resourceId('Microsoft.Web/connections', parameters('documentdb_1_Connection_Name'))]",
+                "connectionName": "[parameters('documentdb_1_Connection_Name')]"
+              }
+            }
+          }
+        }
+      },
+      "name": "pacofarmtotable-logic-sendconfirmationrequestandsubscribetowebhook",
+      "type": "Microsoft.Logic/workflows",
+      "location": "[parameters('LogicAppLocation')]",
+      "apiVersion": "2016-06-01",
+      "dependsOn": [
+        "[resourceId('Microsoft.Web/connections', parameters('twilio_1_Connection_Name'))]",
+        "[resourceId('Microsoft.Web/connections', parameters('documentdb_1_Connection_Name'))]"
+      ]
+    },
+    {
+      "type": "MICROSOFT.WEB/CONNECTIONS",
+      "apiVersion": "2016-06-01",
+      "name": "[parameters('documentdb_1_Connection_Name')]",
+      "location": "australiasoutheast",
+      "properties": {
+        "api": {
+          "id": "[concat(subscription().id, '/providers/Microsoft.Web/locations/', 'australiasoutheast', '/managedApis/', 'documentdb')]"
+        },
+        "displayName": "[parameters('documentdb_1_Connection_DisplayName')]",
+        "parameterValues": {
+          "databaseAccount": "[parameters('documentdb_1_databaseAccount')]",
+          "accessKey": "[parameters('documentdb_1_accessKey')]"
+        }
+      }
+    },
+    {
+      "type": "MICROSOFT.WEB/CONNECTIONS",
+      "apiVersion": "2016-06-01",
+      "name": "[parameters('twilio_1_Connection_Name')]",
+      "location": "australiasoutheast",
+      "properties": {
+        "api": {
+          "id": "[concat(subscription().id, '/providers/Microsoft.Web/locations/', 'australiasoutheast', '/managedApis/', 'twilio')]"
+        },
+        "displayName": "[parameters('twilio_1_Connection_DisplayName')]",
+        "parameterValues": {
+          "sid": "[parameters('twilio_1_sid')]",
+          "token": "[parameters('twilio_1_token')]"
+        }
+      }
+    }
+  ],
+  "outputs": {}
+}

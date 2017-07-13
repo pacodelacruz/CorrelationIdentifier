@@ -1,0 +1,162 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2015-01-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "servicebus_1_Connection_Name": {
+      "type": "string",
+      "defaultValue": "servicebus"
+    },
+    "servicebus_1_Connection_DisplayName": {
+      "type": "string"
+    },
+    "servicebus_1_connectionString": {
+      "type": "securestring",
+      "metadata": {
+        "description": "Azure Service Bus Connection String"
+      }
+    },
+    "LogicAppLocation": {
+      "type": "string",
+      "minLength": 1,
+      "defaultValue": "australiasoutheast"
+    }
+  },
+  "variables": {},
+  "resources": [
+    {
+      "properties": {
+        "state": "Enabled",
+        "definition": {
+          "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+          "actions": {
+            "Have_They_Confirmed_the_Scheduled_Delivery": {
+              "type": "If",
+              "expression": "@equals(toUpper(body('Send_Request_for_Confirmation_Subscribe_to_Instance-Based_Webhook_and_Wait')['response']), 'YES')",
+              "actions": {
+                "Send_Confirmed_Scheduled_Delivery_to_Queue": {
+                  "type": "ApiConnection",
+                  "inputs": {
+                    "host": {
+                      "connection": {
+                        "name": "@parameters('$connections')['servicebus']['connectionId']"
+                      }
+                    },
+                    "method": "post",
+                    "path": "/@{encodeURIComponent('confirmedscheduleddeliveries')}/messages",
+                    "body": {
+                      "ContentData": "@{triggerBody()?['ContentData']}",
+                      "ContentType": "@triggerBody()?['ContentType']"
+                    },
+                    "queries": {
+                      "systemProperties": "None"
+                    }
+                  },
+                  "runAfter": {},
+                  "description": "Sends the original message to the ConfirmedScheduledDeliveries queue for further processing"
+                }
+              },
+              "runAfter": {
+                "Send_Request_for_Confirmation_Subscribe_to_Instance-Based_Webhook_and_Wait": [
+                  "Succeeded"
+                ]
+              },
+              "description": "Checks if the customer confirmed the order, i.e. if the response body of the Webhook action is equal to 'YES' "
+            },
+            "Send_Request_for_Confirmation_Subscribe_to_Instance-Based_Webhook_and_Wait": {
+              "type": "HttpWebhook",
+              "inputs": {
+                "subscribe": {
+                  "method": "POST",
+                  "uri": "https://prod-10.australiasoutheast.logic.azure.com:443/workflows/guid/triggers/manual/paths/invoke?api-version=2016-06-01&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=token",
+                  "body": {
+                    "callbackUrl": "@{listCallbackUrl()}",
+                    "scheduledDelivery": "@json(base64ToString(triggerBody()?['ContentData']))"
+                  }
+                },
+                "unsubscribe": {
+                  "method": "POST",
+                  "uri": "https://prod-26.australiasoutheast.logic.azure.com:443/workflows/guid/triggers/manual/paths/invoke?api-version=2016-06-01&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=token",
+                  "body": {
+                    "id": "@json(base64ToString(triggerBody()?['ContentData']))['phone']"
+                  }
+                },
+                "retryPolicy": {
+                  "type": "none"
+                }
+              },
+              "runAfter": {},
+              "description": "Calls an http endpoint which sends a request for confirmation and subscribes the workflow instance to the instance-based webhook. Then waits for the instance-based webhook callback. If it times out, calls an endpoint to unsubscribe the instance.",
+              "limit": {
+                "timeout": "PT12H"
+              }
+            }
+          },
+          "parameters": {
+            "$connections": {
+              "defaultValue": {},
+              "type": "Object"
+            }
+          },
+          "triggers": {
+            "When_a_Scheduled_Delivery_Message_is_Received_in_the_Queue_(auto-complete)": {
+              "type": "ApiConnection",
+              "inputs": {
+                "host": {
+                  "connection": {
+                    "name": "@parameters('$connections')['servicebus']['connectionId']"
+                  }
+                },
+                "method": "get",
+                "path": "/@{encodeURIComponent('scheduleddeliveriestoconfirm')}/messages/head",
+                "queries": {
+                  "queueType": "Main"
+                }
+              },
+              "recurrence": {
+                "frequency": "Minute",
+                "interval": 10
+              },
+              "description": "Listens to the Queue to process scheduled delivery messages"
+            }
+          },
+          "contentVersion": "1.0.0.0",
+          "outputs": {}
+        },
+        "parameters": {
+          "$connections": {
+            "value": {
+              "servicebus": {
+                "id": "[concat(subscription().id, '/providers/Microsoft.Web/locations/', 'australiasoutheast', '/managedApis/', 'servicebus')]",
+                "connectionId": "[resourceId('Microsoft.Web/connections', parameters('servicebus_1_Connection_Name'))]",
+                "connectionName": "[parameters('servicebus_1_Connection_Name')]"
+              }
+            }
+          }
+        }
+      },
+      "name": "pacofarmtotable-logic-confirmscheduleddelivery",
+      "type": "Microsoft.Logic/workflows",
+      "location": "[parameters('LogicAppLocation')]",
+      "apiVersion": "2016-06-01",
+      "dependsOn": [
+        "[resourceId('Microsoft.Web/connections', parameters('servicebus_1_Connection_Name'))]"
+      ]
+    },
+    {
+      "type": "MICROSOFT.WEB/CONNECTIONS",
+      "apiVersion": "2016-06-01",
+      "name": "[parameters('servicebus_1_Connection_Name')]",
+      "location": "australiasoutheast",
+      "properties": {
+        "api": {
+          "id": "[concat(subscription().id, '/providers/Microsoft.Web/locations/', 'australiasoutheast', '/managedApis/', 'servicebus')]"
+        },
+        "displayName": "[parameters('servicebus_1_Connection_DisplayName')]",
+        "parameterValues": {
+          "connectionString": "[parameters('servicebus_1_connectionString')]"
+        }
+      }
+    }
+  ],
+  "outputs": {}
+}
